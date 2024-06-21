@@ -1,0 +1,156 @@
+﻿@page "/"
+@using System.Net.Http
+@using System.Net.Http.Headers
+@using System.Web
+@using System.Collections.Specialized
+@inject HttpClient Http
+@using System.Collections.Generic
+@using System.Threading
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="d-flex align-center justify-center" Style="height: 70vh;">
+    <div class="mud-width-full" style="max-width: 900px;">
+        <MudPaper Elevation="25" Class="pa-4" Width="100%">
+                <MudText Typo="Typo.h5" GutterBottom="true">Enter URL to Start Requests</MudText>
+                <MudTextField @bind-Value="url" Variant="Variant.Filled" Label="Enter URL here" Lines="5" FullWidth="true" />
+                <br />
+                <MudNumericField @bind-Value="maxRequests" Label="Max Requests (1-5000)" Min="1" Max="5000" Variant="Variant.Outlined" />
+
+                <div class="d-flex justify-between">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartRequests" Disabled="@isRunning" Style="margin-top: 16px;">
+                        Start
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="StopRequests" Disabled="!isRunning" Style="margin-top: 16px; margin-left: 8px;">
+                        Stop
+                    </MudButton>
+                </div>
+
+                <MudText Typo="Typo.subtitle1" Style="margin-top: 16px;">
+                    Success: @successCount | Failure: @failureCount
+                </MudText>
+
+                <MudList Style="margin-top: 16px; max-height: 300px; overflow-y: auto;">
+                    @foreach (var log in requestLogs)
+                    {
+                        <MudListItem>
+                            @log
+                        </MudListItem>
+                    }
+                </MudList>
+        </MudPaper>
+    </div>
+</MudContainer>
+
+
+@code {
+    private string url;
+    private int successCount = 0;
+    private int failureCount = 0;
+    private int parallelRequests = 50;
+    private bool isRunning = false;
+    private List<string> requestLogs = new List<string>();
+    private CancellationTokenSource cancellationTokenSource;
+    private int maxRequests = 500; 
+
+    private async Task StartRequests()
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return;
+        }
+
+        var queryParams = ExtractQueryParams(url);
+        isRunning = true;
+        cancellationTokenSource = new CancellationTokenSource();
+
+        int totalRequests = 0;
+
+        while (isRunning && totalRequests < maxRequests)
+        {
+            var tasks = new Task[parallelRequests];
+            for (int i = 0; i < parallelRequests; i++)
+            {
+                tasks[i] = SendRequest(queryParams, cancellationTokenSource.Token);
+            }
+            try
+            {
+                await Task.WhenAll(tasks);
+                totalRequests += parallelRequests;
+                if (totalRequests >= maxRequests)
+                {
+                    StopRequests();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+              
+            }
+            StateHasChanged(); 
+        }
+    }
+
+    private void StopRequests()
+    {
+        isRunning = false;
+        cancellationTokenSource?.Cancel();
+    }
+
+    private async Task SendRequest(NameValueCollection queryParams, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var boundary = "reqable-f01e4f71-3006-11ef-8b21-8741560245b7";
+            var content = new MultipartFormDataContent(boundary);
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+            content.Add(new StringContent(timestamp), "viewCompletedAt");
+            content.Add(new StringContent("81"), "reference");
+
+            var request = new HttpRequestMessage(HttpMethod.Post, "https://clownfish-app-f7unk.ondigitalocean.app/v2/tasks/claimAdsgramAdReward");
+            request.Headers.Add("Reqable-Id", "reqable-id-ea1b4318-bc3d-431e-9ef5-980b7da9e59d");
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1");
+            request.Headers.Add("Accept", "application/json, text/plain, */*");
+            request.Headers.Add("accept-language", "en-US");
+
+            string launchParams = HttpUtility.UrlDecode(queryParams["tgWebAppData"]);
+            request.Headers.Add("launch-params", launchParams);
+            request.Headers.Add("origin", "https://miniapp.yesco.in");
+            request.Headers.Add("sec-fetch-site", "cross-site");
+            request.Headers.Add("sec-fetch-mode", "cors");
+            request.Headers.Add("sec-fetch-dest", "empty");
+            request.Headers.Add("referer", "https://miniapp.yesco.in/");
+            request.Headers.Add("priority", "u=4, i");
+
+            if (queryParams["cookie"] != null)
+            {
+                request.Headers.Add("Cookie", HttpUtility.UrlDecode(queryParams["cookie"]));
+            }
+
+            content.Headers.ContentType = new MediaTypeHeaderValue("multipart/form-data");
+            content.Headers.ContentType.Parameters.Add(new NameValueHeaderValue("boundary", boundary));
+            request.Content = content;
+
+            var response = await Http.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            successCount++;
+            requestLogs.Add($"Success: {response.StatusCode} at {DateTime.Now}");
+        }
+        catch (OperationCanceledException)
+        {
+           
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                failureCount++;
+                requestLogs.Add($"Failure: {ex.Message} at {DateTime.Now}");
+            }
+        }
+    }
+
+    private NameValueCollection ExtractQueryParams(string url)
+    {
+        var uri = new Uri(url);
+        var query = HttpUtility.ParseQueryString(uri.Fragment.Substring(1)); 
+        return query;
+    }
+}
